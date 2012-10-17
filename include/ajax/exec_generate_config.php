@@ -51,16 +51,25 @@
     }
 
     // check if the Nagios / Icinga binary is executable
-    exec(NAGIOS_BIN,$bin_out);
-    if(!preg_match('/Nagios|Icinga/',implode(' ',$bin_out))){
-        $content = "Error accessing or executing Nagios / Icinga binary '".NAGIOS_BIN."'. <br>Cannot run the mandatory syntax check.";
+    exec(NAGIOS_BIN . " 2>&1",$bin_out);
+
+    $engine = "nagios";
+    if(!preg_match('/Nagios|Icinga|shinken/',implode(' ',$bin_out))){
+
+        $content = "Error accessing or executing Nagios / Icinga / shinken binary '".NAGIOS_BIN."'. <br>Cannot run the mandatory syntax check.";
         NConf_DEBUG::set($content, 'ERROR');
         echo NConf_HTML::limit_space(
             NConf_HTML::show_error('Error')
         );
         remove_lock();
         exit;
-	}
+	}else{
+    if (preg_match('/shinken/',implode(' ',$bin_out))){
+            $engine = "shinken";
+        }else{
+            $engine = "nagios";
+        }
+    }
 
     // check if existing "output/NagiosConfig.tgz" is writable
     if(file_exists(NCONFDIR."/output/NagiosConfig.tgz" and !is_writable(NCONFDIR."/output/NagiosConfig.tgz"))){
@@ -103,7 +112,7 @@
         $renamed = preg_replace('/-|\s/','_',$entry["attr_value"]);
 
         if($entry["config_class"] == 'nagios-collector'){
-            $renamed = preg_replace('/Nagios|Icinga/i','collector',$renamed);
+            $renamed = preg_replace('/Nagios|Icinga|shinken/i','collector',$renamed);
         }
         array_push($servers, $renamed);
     }
@@ -171,20 +180,31 @@
         $server_str = preg_replace("/\./", "_", $server);
 
         # run test
-        exec(NAGIOS_BIN." -v ".NCONFDIR."/temp/test/".$server.".cfg",$srv_summary[$server]);
+	$command = NAGIOS_BIN." -v -c ".NCONFDIR."/temp/test/".$server.".cfg -c ".NCONFDIR."/temp/global/shinken-specific.cfg";
+        exec($command,$srv_summary[$server]);
 
         $total_msg = '';
         $count=0;
         $i = 0;
         foreach($srv_summary[$server] as $line){
-            if( preg_match("/^Total/",$line) ){
-                # add splitter between messages
+            if ($engine == "shinken"){
                 $total_msg .= ( $i > 0 ) ? $break : '';
                 $i++;
                 $total_msg .= $line;
                 $count++;
-                if( preg_match("/Errors/",$line) && !preg_match('/Total Errors:\s+0/',$line)){
-                    $status = "error";
+                if( preg_match("/Error/",$line)){
+                        $status = "error";
+                }
+            }else{
+                if( preg_match("/^Total/",$line) ){
+                    # add splitter between messages
+                    $total_msg .= ( $i > 0 ) ? $break : '';
+                    $i++;
+                    $total_msg .= $line;
+                    $count++;
+                    if( preg_match("/Errors/",$line) && !preg_match('/Total Errors:\s+0/',$line)){
+                        $status = "error";
+                    }
                 }
             }
         }
@@ -193,8 +213,7 @@
             $status = "error";
         }
 
-
-        $total_msg = '<span class="notBold accordion_header_right">'.$total_msg.'</span>';
+        $total_msg = '<span class="notBold accordion_header_right" style="display: none;">'.$total_msg.'</span>';
         // print server info
         $title = '<span class="ui-icon ui-icon-triangle-1-e"></span><a href="#">'.$server_str.$total_msg.'</a>';
         echo NConf_HTML::title($title, 3, 'class="accordion_title ui-accordion-header ui-helper-reset ui-state-default ui-corner-top ui-corner-bottom"');
@@ -271,7 +290,7 @@
         }
         // Remove generated config
         system("rm -rf ".NCONFDIR."/temp/*");
-        $content = "Deployment not possible due to errors in configuration.";
+        $content = "Deployment not possible due to errors in configuration. (".$engine.")";
         echo NConf_HTML::limit_space(
             NConf_HTML::show_error('Error', $content)
         );
